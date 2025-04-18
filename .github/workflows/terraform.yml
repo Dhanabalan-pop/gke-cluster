@@ -40,4 +40,3 @@ jobs:
 
       - name: Terraform Plan
         run: terraform plan -input=false
-        if: github.event_name == 'pull_request'
