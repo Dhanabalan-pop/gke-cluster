@@ -1,6 +1,7 @@
 provider "google" {
   project = var.project_id
   region  = var.region
+  use_oidc = true
 }
 
 resource "google_container_cluster" "primary" {
