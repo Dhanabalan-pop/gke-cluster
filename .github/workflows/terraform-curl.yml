@@ -42,14 +42,19 @@ jobs:
           terraform_version: "1.6.0"
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      - name: Clean Terraform cache
+      # ====================== CLEAN AND INITIALIZE ======================
+      - name: Clean previous runs
         run: |
           rm -rf .terraform*
           rm -f *.tfstate*
 
-      # ====================== TERRAFORM INIT ======================
       - name: Terraform Init
-        run: terraform init -upgrade -input=false
+        run: |
+          terraform init \
+            -input=false \
+            -upgrade \
+            -backend-config="organization=$TF_ORG" \
+            -backend-config="workspaces.name=$TF_WORKSPACE"
         env:
           GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/credentials.json"
 
