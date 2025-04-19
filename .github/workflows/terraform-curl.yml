@@ -1,0 +1,105 @@
+name: 'Terraform Cloud API Automation (Curl)'
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths: ['**.tf']
+
+env:
+  TF_API_URL: "https://app.terraform.io/api/v2"
+
+permissions:
+  id-token: write       # Required for WIF
+  contents: read        # Required for checkout
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      # ====================== SETUP ======================
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ====================== GCP AUTH (WIF) ======================
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+
+      # ====================== TERRAFORM CLOUD API ======================
+      - name: Get Workspace ID
+        id: get-workspace
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          WORKSPACE_ID=$(curl -s \
+            --header "Authorization: Bearer $TF_API_TOKEN" \
+            --header "Content-Type: application/vnd.api+json" \
+            "$TF_API_URL/organizations/$TF_ORG/workspaces/$TF_WORKSPACE" \
+            | jq -r '.data.id')
+          echo "workspace_id=$WORKSPACE_ID" >> $GITHUB_OUTPUT
+
+      # ====================== TRIGGER RUN ======================
+      - name: Create Terraform Run
+        id: create-run
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          GCP_CREDS: $(cat ${{ runner.temp }}/credentials.json | jq -c | base64 -w 0)
+        run: |
+          RUN_PAYLOAD=$(cat <<EOF
+          {
+            "data": {
+              "attributes": {
+                "message": "Triggered via GitHub Actions",
+                "auto-apply": true
+              },
+              "type": "runs",
+              "relationships": {
+                "workspace": {
+                  "data": { "type": "workspaces", "id": "${{ steps.get-workspace.outputs.workspace_id }}" }
+                }
+              }
+            }
+          EOF
+          )
+
+          # Inject GCP credentials as workspace variables
+          curl -X POST \
+            --header "Authorization: Bearer $TF_API_TOKEN" \
+            --header "Content-Type: application/vnd.api+json" \
+            --data "$RUN_PAYLOAD" \
+            "$TF_API_URL/runs"
+
+      # ====================== MONITOR RUN ======================
+      - name: Wait for Completion
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          for i in {1..30}; do
+            STATUS=$(curl -s \
+              --header "Authorization: Bearer $TF_API_TOKEN" \
+              "$TF_API_URL/runs/${{ steps.create-run.outputs.run_id }}" \
+              | jq -r '.data.attributes.status')
+
+            case $STATUS in
+              "applied") echo "Success!"; exit 0;;
+              "errored") echo "Run failed!"; exit 1;;
+              *) echo "Status: $STATUS"; sleep 10;;
+            esac
+          done
+          echo "Timeout waiting for completion"
+          exit 1
+
+      # ====================== GET OUTPUTS ======================
+      - name: Fetch Outputs
+        if: success()
+        run: |
+          curl -s \
+            --header "Authorization: Bearer $TF_API_TOKEN" \
+            "$TF_API_URL/workspaces/${{ steps.get-workspace.outputs.workspace_id }}/current-state-version" \
+            | jq '.data.attributes.outputs'
