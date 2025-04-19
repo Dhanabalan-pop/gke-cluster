@@ -5,15 +5,17 @@ on:
   push:
     branches: [ "main" ]
     paths: ['**.tf']
+
 env:
-  TF_ORG: "dhanabalan-gcp-org"       # From your backend.tf
-  TF_WORKSPACE: "gke-cluster"        # From your backend.tf
+  TF_ORG: "dhanabalan-gcp-org"
+  TF_WORKSPACE: "gke-cluster"
   TF_API_URL: "https://app.terraform.io/api/v2"
-  GCP_PROJECT: "sandbox-dev-dbg"     # From your variables.tf
-  GCP_REGION: "us-central1"          # From your variables.tf
+  GCP_PROJECT: "sandbox-dev-dbg"
+  GCP_REGION: "us-central1"
+
 permissions:
-  id-token: write       # Required for WIF
-  contents: read        # Required for checkout
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
@@ -44,17 +46,48 @@ jobs:
             --header "Content-Type: application/vnd.api+json" \
             "$TF_API_URL/organizations/$TF_ORG/workspaces/$TF_WORKSPACE" \
             | jq -r '.data.id')
+          
+          if [ -z "$WORKSPACE_ID" ]; then
+            echo "::error::Failed to get workspace ID"
+            exit 1
+          fi
+          
           echo "workspace_id=$WORKSPACE_ID" >> $GITHUB_OUTPUT
+          echo "Workspace ID: $WORKSPACE_ID"
+
+      # ====================== INJECT GCP CREDENTIALS ======================
+      - name: Add GCP Credentials to Workspace
+        id: add-creds
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          GCP_CREDS=$(cat ${{ runner.temp }}/credentials.json | jq -c | base64 -w 0)
+          
+          curl -s -X POST \
+            --header "Authorization: Bearer $TF_API_TOKEN" \
+            --header "Content-Type: application/vnd.api+json" \
+            --data '{
+              "data": {
+                "type": "vars",
+                "attributes": {
+                  "key": "GOOGLE_CREDENTIALS",
+                  "value": "'"$GCP_CREDS"'",
+                  "category": "env",
+                  "sensitive": true,
+                  "description": "Injected via GitHub Actions"
+                }
+              }
+            }' \
+            "$TF_API_URL/workspaces/${{ steps.get-workspace.outputs.workspace_id }}/vars" \
+            | jq
 
       # ====================== TRIGGER RUN ======================
       - name: Create Terraform Run
         id: create-run
         env:
           TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
-          GCP_CREDS: $(cat ${{ runner.temp }}/credentials.json | jq -c | base64 -w 0)
         run: |
-          RUN_PAYLOAD=$(cat <<EOF
-          {
+          RUN_PAYLOAD='{
             "data": {
               "attributes": {
                 "message": "Triggered via GitHub Actions",
@@ -63,43 +96,74 @@ jobs:
               "type": "runs",
               "relationships": {
                 "workspace": {
-                  "data": { "type": "workspaces", "id": "${{ steps.get-workspace.outputs.workspace_id }}" }
+                  "data": {
+                    "type": "workspaces",
+                    "id": "'"${{ steps.get-workspace.outputs.workspace_id }}"'"
+                  }
                 }
               }
             }
-          EOF
-          )
+          }'
 
-          # Inject GCP credentials as workspace variables
-          curl -X POST \
+          echo "Payload:"
+          echo "$RUN_PAYLOAD" | jq
+
+          RESPONSE=$(curl -s -X POST \
             --header "Authorization: Bearer $TF_API_TOKEN" \
             --header "Content-Type: application/vnd.api+json" \
             --data "$RUN_PAYLOAD" \
-            "$TF_API_URL/runs"
+            "$TF_API_URL/runs")
+
+          RUN_ID=$(echo "$RESPONSE" | jq -r '.data.id')
+          
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ]; then
+            echo "::error::Failed to create run"
+            echo "$RESPONSE" | jq
+            exit 1
+          fi
+
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "Run created with ID: $RUN_ID"
 
       # ====================== MONITOR RUN ======================
       - name: Wait for Completion
         env:
           TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
         run: |
-          for i in {1..30}; do
+          for i in {1..60}; do  # Increased timeout to 10 minutes
             STATUS=$(curl -s \
               --header "Authorization: Bearer $TF_API_TOKEN" \
               "$TF_API_URL/runs/${{ steps.create-run.outputs.run_id }}" \
               | jq -r '.data.attributes.status')
 
             case $STATUS in
-              "applied") echo "Success!"; exit 0;;
-              "errored") echo "Run failed!"; exit 1;;
-              *) echo "Status: $STATUS"; sleep 10;;
+              "applied")
+                echo "::notice::Terraform applied successfully!"
+                exit 0
+                ;;
+              "errored"|"canceled")
+                echo "::error::Terraform failed with status: $STATUS"
+                # Get error details
+                curl -s \
+                  --header "Authorization: Bearer $TF_API_TOKEN" \
+                  "$TF_API_URL/runs/${{ steps.create-run.outputs.run_id }}/apply" \
+                  | jq '.data.attributes."status-timestamps"'
+                exit 1
+                ;;
+              *)
+                echo "Current status: $STATUS (Attempt $i/60)"
+                sleep 10
+                ;;
             esac
           done
-          echo "Timeout waiting for completion"
+          echo "::error::Timeout waiting for completion"
           exit 1
 
       # ====================== GET OUTPUTS ======================
       - name: Fetch Outputs
         if: success()
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
         run: |
           curl -s \
             --header "Authorization: Bearer $TF_API_TOKEN" \
