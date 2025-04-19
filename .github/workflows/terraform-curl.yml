@@ -8,7 +8,6 @@ on:
 
 env:
   TF_API_URL: "https://app.terraform.io/api/v2"
-
 permissions:
   id-token: write       # Required for WIF
   contents: read        # Required for checkout
@@ -27,8 +26,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v1
         with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           create_credentials_file: true
 
       # ====================== TERRAFORM CLOUD API ======================
