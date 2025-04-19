@@ -5,9 +5,12 @@ on:
   push:
     branches: [ "main" ]
     paths: ['**.tf']
-
 env:
+  TF_ORG: "dhanabalan-gcp-org"       # From your backend.tf
+  TF_WORKSPACE: "gke-cluster"        # From your backend.tf
   TF_API_URL: "https://app.terraform.io/api/v2"
+  GCP_PROJECT: "sandbox-dev-dbg"     # From your variables.tf
+  GCP_REGION: "us-central1"          # From your variables.tf
 permissions:
   id-token: write       # Required for WIF
   contents: read        # Required for checkout
