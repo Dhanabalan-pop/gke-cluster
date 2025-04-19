@@ -35,6 +35,21 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           create_credentials_file: true
 
+      - name: Clean and Reinitialize Providers
+        run: |
+            # Force clean all cached providers and modules
+            rm -rf .terraform .terraform.lock.hcl
+    
+            # Reinitialize with upgraded providers
+            terraform init -upgrade -input=false
+    
+            # Verify no oidc references remain
+            if grep -r "use_oidc" ./; then
+             echo "::error::Found remaining use_oidc references"
+             exit 1
+            fi
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/credentials.json"
       # ====================== TERRAFORM CLOUD API ======================
       - name: Get Workspace ID
         id: get-workspace
