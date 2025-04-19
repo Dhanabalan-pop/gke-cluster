@@ -9,7 +9,6 @@ on:
 env:
   TF_ORG: "dhanabalan-gcp-org"
   TF_WORKSPACE: "gke-cluster"
-  TF_API_URL: "https://app.terraform.io/api/v2"
   GCP_PROJECT: "sandbox-dev-dbg"
   GCP_REGION: "us-central1"
 
@@ -48,13 +47,9 @@ jobs:
           rm -rf .terraform*
           rm -f *.tfstate*
 
+      # ====================== TERRAFORM INIT ======================
       - name: Terraform Init
-        run: |
-          terraform init \
-            -input=false \
-            -upgrade \
-            -backend-config="organization=$TF_ORG" \
-            -backend-config="workspaces.name=$TF_WORKSPACE"
+        run: terraform init -input=false -upgrade
         env:
           GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/credentials.json"
 
@@ -71,7 +66,7 @@ jobs:
           WORKSPACE_ID=$(curl -s \
             --header "Authorization: Bearer $TF_API_TOKEN" \
             --header "Content-Type: application/vnd.api+json" \
-            "$TF_API_URL/organizations/$TF_ORG/workspaces/$TF_WORKSPACE" \
+            "https://app.terraform.io/api/v2/organizations/$TF_ORG/workspaces/$TF_WORKSPACE" \
             | jq -r '.data.id')
           echo "workspace_id=$WORKSPACE_ID" >> $GITHUB_OUTPUT
 
@@ -102,7 +97,7 @@ jobs:
             --header "Authorization: Bearer $TF_API_TOKEN" \
             --header "Content-Type: application/vnd.api+json" \
             --data "$RUN_PAYLOAD" \
-            "$TF_API_URL/runs")
+            "https://app.terraform.io/api/v2/runs")
 
           RUN_ID=$(echo "$RESPONSE" | jq -r '.data.id')
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
@@ -115,7 +110,7 @@ jobs:
           for i in {1..60}; do
             STATUS=$(curl -s \
               --header "Authorization: Bearer $TF_API_TOKEN" \
-              "$TF_API_URL/runs/${{ steps.create-run.outputs.run_id }}" \
+              "https://app.terraform.io/api/v2/runs/${{ steps.create-run.outputs.run_id }}" \
               | jq -r '.data.attributes.status')
 
             case $STATUS in
@@ -124,7 +119,7 @@ jobs:
                 echo "::error::Run failed"
                 curl -s \
                   --header "Authorization: Bearer $TF_API_TOKEN" \
-                  "$TF_API_URL/runs/${{ steps.create-run.outputs.run_id }}/apply" | jq
+                  "https://app.terraform.io/api/v2/runs/${{ steps.create-run.outputs.run_id }}/apply" | jq
                 exit 1;;
               *) echo "Status: $STATUS"; sleep 10;;
             esac
